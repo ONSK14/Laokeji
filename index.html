@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 角色聊天平台</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+        }
+        #sidebar {
+            width: 300px;
+            background-color: #f0f0f0;
+            transform: translateX(-100%);
+            transition: transform 0.3s;
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100%;
+            z-index: 1000;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #sidebar.open {
+            transform: translateX(0);
+        }
+        #menu-toggle {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            cursor: pointer;
+            z-index: 1001;
+        }
+        #menu-toggle div {
+            width: 30px;
+            height: 4px;
+            background-color: black;
+            margin: 6px 0;
+        }
+        #chat-container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            margin-left: 0;
+            transition: margin-left 0.3s;
+        }
+        #chat-messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        #message-input {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        #api-settings {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 菜单切换按钮 -->
+    <div id="menu-toggle">
+        <div></div>
+        <div></div>
+        <div></div>
+    </div>
+
+    <!-- 侧边栏 -->
+    <div id="sidebar">
+        <h2>设置</h2>
+        
+        <!-- API 设置 -->
+        <div id="api-settings">
+            <h3>API 设置</h3>
+            <input type="text" id="api-key" placeholder="API Key">
+            <input type="text" id="api-url" placeholder="API 地址">
+            <input type="text" id="model-name" placeholder="模型名称">
+        </div>
+
+        <!-- 角色选择 -->
+        <div id="character-selection">
+            <h3>AI 角色</h3>
+            <button id="new-character-btn">新建角色</button>
+            <div id="character-list"></div>
+        </div>
+
+        <!-- 用户角色选择 -->
+        <div id="user-character-selection">
+            <h3>用户角色</h3>
+            <button id="new-user-character-btn">新建用户角色</button>
+            <div id="user-character-list"></div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div id="chat-actions">
+            <button id="download-chat">下载聊天记录</button>
+            <button id="clear-chat">清除当前聊天记录</button>
+        </div>
+    </div>
+
+    <!-- 主聊天容器 -->
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <textarea id="message-input" placeholder="输入您的消息..."></textarea>
+        <button id="send-message">发送</button>
+    </div>
+
+    <!-- 新建角色模态框 -->
+    <div id="character-modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:20px; border:1px solid black;">
+        <h3>新建角色</h3>
+        <input type="text" id="character-name" placeholder="角色名称">
+        <select id="character-gender">
+            <option value="">选择性别（可选）</option>
+            <option value="male">男</option>
+            <option value="female">女</option>
+            <option value="other">其他</option>
+        </select>
+        <textarea id="character-description" placeholder="角色简介"></textarea>
+        <button id="save-character">保存角色</button>
+        <button id="cancel-character">取消</button>
+    </div>
+
+    <script>
+        // 公开 API 配置（DeepSeek）
+        const DEFAULT_API_CONFIG = {
+            apiKey: 'sk-4dd324d0fdf849ebbec7e4692fde112a', // 替换为您的 DeepSeek API Key
+            apiUrl: 'https://api.deepseek.com/v1/chat/completions', // DeepSeek API 地址
+            modelName: 'deepseek-chat' // DeepSeek 模型名称
+        };
+
+        // 状态管理类
+        class ChatManager {
+            constructor() {
+                // 初始化聊天相关状态
+                this.messages = [];
+                this.maxMessages = 50;
+                this.currentApiConfig = { ...DEFAULT_API_CONFIG };
+                this.currentAICharacter = null;
+                this.currentUserCharacter = null;
+
+                // 初始化事件监听器
+                this.initEventListeners();
+            }
+
+            // 初始化事件监听器
+            initEventListeners() {
+                // 菜单切换按钮事件
+                document.getElementById('menu-toggle').addEventListener('click', () => {
+                    document.getElementById('sidebar').classList.toggle('open');
+                });
+
+                // API 设置输入事件
+                ['api-key', 'api-url', 'model-name'].forEach(id => {
+                    document.getElementById(id).addEventListener('change', (e) => {
+                        this.updateAPIConfig(id, e.target.value);
+                    });
+                });
+
+                // 新建角色按钮事件
+                document.getElementById('new-character-btn').addEventListener('click', () => {
+                    this.showCharacterModal('ai');
+                });
+
+                // 新建用户角色按钮事件
+                document.getElementById('new-user-character-btn').addEventListener('click', () => {
+                    this.showCharacterModal('user');
+                });
+
+                // 保存角色按钮事件
+                document.getElementById('save-character').addEventListener('click', () => {
+                    this.saveCharacter();
+                });
+
+                // 发送消息按钮事件
+                document.getElementById('send-message').addEventListener('click', () => {
+                    this.sendMessage();
+                });
+
+                // 下载聊天记录按钮事件
+                document.getElementById('download-chat').addEventListener('click', () => {
+                    this.downloadChatHistory();
+                });
+
+                // 清除聊天记录按钮事件
+                document.getElementById('clear-chat').addEventListener('click', () => {
+                    this.clearChatHistory();
+                });
+            }
+
+            // 更新 API 配置
+            updateAPIConfig(key, value) {
+                if (value) {
+                    this.currentApiConfig[key] = value;
+                }
+            }
+
+            // 显示角色创建模态框
+            showCharacterModal(type) {
+                const modal = document.getElementById('character-modal');
+                modal.setAttribute('data-type', type);
+                modal.style.display = 'block';
+            }
+
+            // 保存角色
+            saveCharacter() {
+                const name = document.getElementById('character-name').value;
+                const gender = document.getElementById('character-gender').value;
+                const description = document.getElementById('character-description').value;
+
+                if (!name) {
+                    alert('请输入角色名称');
+                    return;
+                }
+
+                const character = { name, gender, description };
+                const type = document.getElementById('character-modal').getAttribute('data-type');
+
+                if (type === 'ai') {
+                    this.currentAICharacter = character;
+                    this.updateCharacterList('ai');
+                } else {
+                    this.currentUserCharacter = character;
+                    this.updateCharacterList('user');
+                }
+
+                // 关闭模态框并重置表单
+                document.getElementById('character-modal').style.display = 'none';
+                document.getElementById('character-name').value = '';
+                document.getElementById('character-gender').value = '';
+                document.getElementById('character-description').value = '';
+            }
+
+            // 更新角色列表
+            updateCharacterList(type) {
+                const listContainer = type === 'ai' 
+                    ? document.getElementById('character-list') 
+                    : document.getElementById('user-character-list');
+                const character = type === 'ai' 
+                    ? this.currentAICharacter 
+                    : this.currentUserCharacter;
+
+                if (character) {
+                    listContainer.innerHTML = `
+                        <div>
+                            <strong>${character.name}</strong>
+                            <p>性别: ${character.gender || '未指定'}</p>
+                            <p>简介: ${character.description}</p>
+                        </div>
+                    `;
+                }
+            }
+
+            // 发送消息
+            async sendMessage() {
+                const messageInput = document.getElementById('message-input');
+                const message = messageInput.value.trim();
+
+                if (!message) return;
+
+                // 检查是否选择了角色
+                if (!this.currentAICharacter || !this.currentUserCharacter) {
+                    alert('请先选择 AI 和用户角色');
+                    return;
+                }
+
+                // 构建 prompt
+                const systemPrompt = this.buildSystemPrompt();
+                
+                // 发送消息到 AI
+                try {
+                    const aiResponse = await this.callAIAPI(systemPrompt + message);
+                    
+                    // 更新消息列表
+                    this.addMessage(this.currentUserCharacter.name, message);
+                    this.addMessage(this.currentAICharacter.name, aiResponse);
+
+                    // 清空输入框
+                    messageInput.value = '';
+                } catch (error) {
+                    console.error('发送消息错误:', error);
+                    alert('发送消息失败，请检查 API 设置');
+                }
+            }
+
+            // 构建系统 Prompt
+            buildSystemPrompt() {
+                // 基于当前角色构建系统提示
+                return `你是${this.currentAICharacter.name}。${this.currentAICharacter.description || ''}
+用户角色：${this.currentUserCharacter.name}。${this.currentUserCharacter.description || ''}
+
+`;
+            }
+
+            // 调用 AI API
+            async callAIAPI(prompt) {
+                // 使用当前 API 配置
+                const apiConfig = this.currentApiConfig.apiKey 
+                    ? this.currentApiConfig 
+                    : DEFAULT_API_CONFIG;
+
+                const response = await fetch(apiConfig.apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiConfig.apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: apiConfig.modelName,
+                        messages: [{ role: 'user', content: prompt }]
+                    })
+                });
+
+                const data = await response.json();
+                return data.choices[0].message.content;
+            }
+
+            // 添加消息到聊天记录
+            addMessage(sender, message) {
+                // 限制消息数量
+                if (this.messages.length >= this.maxMessages) {
+                    this.messages.shift();
+                }
+                this.messages.push({ sender, message });
+                this.renderMessages();
+            }
+
+            // 渲染消息列表
+            renderMessages() {
+                const messagesContainer = document.getElementById('chat-messages');
+                messagesContainer.innerHTML = this.messages.map(msg => 
+                    `${msg.sender}：${msg.message}`
+                ).join('\n');
+            }
+
+            // 下载聊天记录
+            downloadChatHistory() {
+                // 不包含系统提示
+                const chatContent = this.messages.map(msg => 
+                    `${msg.sender}：${msg.message}`
+                ).join('\n');
+
+                const blob = new Blob([chatContent], { type: 'text/plain' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `chat_history_${new Date().toISOString().replace(/:/g, '-')}.txt`;
+                link.click();
+            }
+
+            // 清除聊天记录
+            clearChatHistory() {
+                this.messages = [];
+                this.renderMessages();
+            }
+        }
+
+        // 初始化聊天管理器
+        const chatManager = new ChatManager();
+    </script>
+</body>
+</html>
